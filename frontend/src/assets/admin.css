@@ -1,0 +1,304 @@
+/* Common styles for Admin Layout and Components */
+
+/* Base layout for admin pages */
+.admin-layout-container {
+  display: flex;
+  min-height: 100vh;
+  background-color: #1a0f2d; /* Dark purple background */
+  color: #e0e0e0; /* Default text color for general content */
+}
+
+/* Admin Sidebar Styling */
+.admin-sidebar {
+  width: 250px; /* Fixed width for sidebar */
+  background-color: #2b1a47; /* Darker sidebar background */
+  padding: 20px;
+  box-shadow: 2px 0 10px rgba(0, 0, 0, 0.4); /* Shadow to separate from content */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  border-right: 1px solid #4a2d73; /* Subtle border */
+}
+
+.sidebar-title {
+  margin-bottom: 30px;
+  font-size: 1.8rem;
+  text-align: center;
+  color: #e060a8; /* Neon pink for headings */
+  text-shadow: 0 0 8px rgba(224, 96, 168, 0.7); /* Neon glow */
+  font-weight: bold;
+}
+
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  gap: 15px; /* Spacing between buttons */
+  margin-bottom: auto; /* Pushes logout button to the bottom */
+}
+
+.nav-button {
+  display: block; /* Make router-link behave like a block element */
+  padding: 12px 15px;
+  text-align: center;
+  text-decoration: none;
+  font-weight: bold;
+  border-radius: 8px; /* Rounded corners for buttons */
+  transition: all 0.3s ease;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+}
+
+/* Custom button styles for sidebar */
+.custom-btn-sidebar {
+  background-color: #8a2be2; /* Blue-violet */
+  border: 1px solid #8a2be2;
+  color: #fff;
+}
+.custom-btn-sidebar:hover {
+  background-color: #7a1ee0;
+  border-color: #7a1ee0;
+  transform: translateY(-2px);
+  box-shadow: 0 6px 15px rgba(138, 43, 226, 0.6);
+  color: #fff;
+}
+
+.custom-btn-logout {
+  background-color: #dc3545; /* Red for logout */
+  border-color: #dc3545;
+  border-radius: 8px;
+  font-weight: bold;
+  padding: 10px 20px;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 10px rgba(220, 53, 69, 0.4);
+}
+.custom-btn-logout:hover {
+  background-color: #c82333;
+  border-color: #c82333;
+  transform: translateY(-2px);
+  box-shadow: 0 6px 15px rgba(220, 53, 69, 0.6);
+}
+
+
+/* Admin Main Content Area Styling */
+.admin-main-content {
+  flex-grow: 1; /* Takes remaining space */
+  padding: 30px;
+  display: flex;
+  justify-content: center;
+  align-items: center; /* Center the card in the content area */
+}
+
+.content-card {
+  max-width: 800px; /* Max width for content cards */
+  width: 100%;
+  background-color: #2b1a47; /* Darker card background */
+  border: 1px solid #4a2d73; /* Subtle border */
+  border-radius: 15px;
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.5);
+}
+
+/* Re-using neon theme colors for consistency */
+.text-primary-neon {
+  color: #e060a8; /* Neon pink for headings */
+  text-shadow: 0 0 8px rgba(224, 96, 168, 0.7); /* Neon glow */
+  font-weight: bold;
+}
+
+.text-light-accent {
+  color: #c0b0d0; /* Lighter text for labels/descriptions */
+}
+
+/* Ensure all general text within content card is readable */
+.content-card p,
+.content-card label,
+.content-card small,
+.content-card span { /* Added span for text within list items */
+  color: #e0e0e0 !important; /* Force white/light color for all text */
+}
+.content-card .text-muted { /* Override default Bootstrap text-muted if present */
+  color: #c0b0d0 !important;
+}
+
+
+/* Common styles for forms, inputs, buttons, and lists */
+.custom-input {
+  background-color: #3d2766;
+  border: 1px solid #6a4a9c;
+  color: #e0e0e0; /* Light text in input */
+  border-radius: 8px;
+  padding: 10px 15px;
+}
+.custom-input:focus {
+  background-color: #4a307a;
+  border-color: #e060a8;
+  box-shadow: 0 0 0 0.25rem rgba(224, 96, 168, 0.25);
+  color: #e0e0e0;
+}
+
+.custom-btn-filled {
+  background-color: #8a2be2;
+  border-color: #8a2be2;
+  border-radius: 10px;
+  font-weight: bold;
+  padding: 10px 20px;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 15px rgba(138, 43, 226, 0.4);
+  color: #fff; /* Ensure text is white */
+}
+.custom-btn-filled:hover {
+  background-color: #7a1ee0;
+  border-color: #7a1ee0;
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(138, 43, 226, 0.6);
+  color: #fff;
+}
+.custom-btn-filled:disabled {
+  background-color: #5a3c80; /* Muted disabled color */
+  border-color: #5a3c80;
+  box-shadow: none;
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+
+.custom-btn-outline {
+  background-color: transparent;
+  border: 1px solid #5dbeff; /* Electric blue outline */
+  color: #5dbeff;
+  border-radius: 10px;
+  font-weight: bold;
+  padding: 10px 20px;
+  transition: all 0.3s ease;
+  box-shadow: 0 0 10px rgba(93, 190, 255, 0.3);
+}
+.custom-btn-outline:hover {
+  background-color: #5dbeff;
+  color: #1a0f2d; /* Dark text on hover */
+  transform: translateY(-2px);
+  box-shadow: 0 4px 15px rgba(93, 190, 255, 0.4);
+}
+.custom-btn-outline:disabled {
+  border-color: #6a4a9c; /* Muted disabled color */
+  color: #6a4a9c;
+  box-shadow: none;
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* Custom icon buttons for list items (globally available) */
+.custom-icon-btn {
+  background-color: transparent; /* Transparent background */
+  border: 1px solid #5dbeff; /* Electric blue border */
+  color: #5dbeff; /* Electric blue icon color */
+  border-radius: 5px;
+  padding: 5px 8px; /* Adjusted padding for icons */
+  font-size: 0.9rem; /* Adjusted font size for icons */
+  transition: all 0.2s ease;
+  display: inline-flex; /* Use flex to center icon */
+  align-items: center;
+  justify-content: center;
+}
+.custom-icon-btn:hover {
+  background-color: #5dbeff;
+  color: #1a0f2d; /* Dark text on hover */
+  transform: scale(1.05);
+  box-shadow: 0 0 10px rgba(93, 190, 255, 0.4);
+}
+
+.custom-icon-btn-danger {
+  background-color: transparent; /* Transparent background */
+  border: 1px solid #e060a8; /* Neon pink border */
+  color: #e060a8; /* Neon pink icon color */
+  border-radius: 5px;
+  padding: 5px 8px; /* Adjusted padding for icons */
+  font-size: 0.9rem; /* Adjusted font size for icons */
+  transition: all 0.2s ease;
+  display: inline-flex; /* Use flex to center icon */
+  align-items: center;
+  justify-content: center;
+}
+.custom-icon-btn-danger:hover {
+  background-color: #e060a8;
+  color: #1a0f2d; /* Dark text on hover */
+  transform: scale(1.05);
+  box-shadow: 0 0 10px rgba(224, 96, 168, 0.4);
+}
+
+/* Custom select dropdown styling */
+.custom-select {
+  background-color: #3d2766; /* Darker input background */
+  border: 1px solid #6a4a9c; /* Purple border */
+  color: #e0e0e0; /* Light text in input */
+  border-radius: 8px; /* Rounded input fields */
+  padding: 10px 15px;
+  appearance: none; /* Remove default select arrow */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23e060a8' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M2 5l6 6 6-6'/%3E%3C/svg%3E"); /* Custom arrow */
+  background-repeat: no-repeat;
+  background-position: right 0.75rem center;
+  background-size: 16px 12px;
+}
+.custom-select:focus {
+  border-color: #e060a8; /* Neon pink focus border */
+  box-shadow: 0 0 0 0.25rem rgba(224, 96, 168, 0.25); /* Neon glow on focus */
+}
+
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .admin-layout-container {
+    flex-direction: column;
+  }
+  .admin-sidebar {
+    width: 100%;
+    padding: 15px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+    border-right: none;
+    border-bottom: 1px solid #4a2d73;
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 10px;
+  }
+  .sidebar-title {
+    width: 100%;
+    margin-bottom: 15px;
+  }
+  .sidebar-nav {
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 10px;
+    margin-bottom: 15px;
+  }
+  .nav-button {
+    flex-grow: 1;
+    max-width: 48%;
+  }
+  .custom-btn-logout {
+    width: auto;
+    flex-grow: 1;
+    max-width: 48%;
+  }
+  .admin-main-content {
+    padding: 20px;
+  }
+}
+
+@media (max-width: 576px) {
+  .admin-sidebar {
+    padding: 10px;
+  }
+  .sidebar-title {
+    font-size: 1.5rem;
+  }
+  .nav-button, .custom-btn-logout {
+    font-size: 0.9rem;
+    padding: 8px 10px;
+  }
+  .content-card {
+    padding: 1.5rem !important;
+  }
+  .h2 {
+    font-size: 1.8rem;
+  }
+}
