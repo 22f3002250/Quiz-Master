@@ -1,6 +1,5 @@
 <template>
   <div class="admin-layout-container">
-    <!-- Left Sidebar for Navigation -->
     <aside class="admin-sidebar">
       <h3 class="sidebar-title text-primary-neon">Admin Menu</h3>
       <nav class="sidebar-nav">
@@ -13,7 +12,6 @@
       <button @click="logout" class="btn btn-danger w-100 custom-btn-logout">Logout</button>
     </aside>
 
-    <!-- Main Content Area -->
     <main class="admin-main-content">
       <div class="card p-4 shadow-lg rounded-3 content-card">
         <h2 class="mb-4 text-center text-primary-neon">Manage Subjects</h2>
@@ -31,6 +29,12 @@
           </button>
           <button v-if="editingId" class="btn custom-btn-outline ms-2" @click="cancelEdit">Cancel</button>
         </form>
+
+        <div class="mb-3">
+          <label class="form-label text-light-accent">Search Subjects</label>
+          <input v-model="searchQuery" @input="fetchSubjects" class="form-control custom-input" placeholder="Search by name or description" />
+        </div>
+
         <h4 class="text-light-accent mb-3">Subjects List</h4>
         <ul class="list-group custom-list-group">
           <li v-for="subject in subjects" :key="subject.id" class="list-group-item d-flex justify-content-between align-items-center custom-list-item">
@@ -38,10 +42,10 @@
               <b class="text-primary-neon">{{ subject.name }}</b> - <span class="text-light-accent">{{ subject.description }}</span>
             </span>
             <div>
-              <button class="btn btn-sm custom-btn-action me-2" @click="editSubject(subject)">
+              <button class="btn btn-sm custom-icon-btn me-2" @click="editSubject(subject)">
                 <i class="bi bi-pencil-fill"></i>
               </button>
-              <button class="btn btn-sm custom-btn-action-danger" @click="deleteSubject(subject.id)">
+              <button class="btn btn-sm custom-icon-btn-danger" @click="deleteSubject(subject.id)">
                 <i class="bi bi-trash-fill"></i>
               </button>
             </div>
@@ -62,8 +66,9 @@ const subjectName = ref('')
 const subjectDesc = ref('')
 const subjects = ref([])
 const editingId = ref(null)
+const searchQuery = ref('');
 
-async function fetchSubjects() {
+async function fetchSubjects(bypassCache = false) {
   try {
     const token = localStorage.getItem('token');
     if (!token) {
@@ -72,7 +77,15 @@ async function fetchSubjects() {
         return;
     }
 
-    const response = await fetch('http://localhost:5000/api/subjects', {
+    const url = new URL('http://localhost:5000/api/subjects');
+    if (searchQuery.value) {
+      url.searchParams.append('query', searchQuery.value);
+    }
+    if (bypassCache) {
+        url.searchParams.append('cache_bust', Date.now());
+    }
+
+    const response = await fetch(url.toString(), {
       headers: {
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json'
@@ -95,7 +108,7 @@ async function fetchSubjects() {
   }
 }
 
-onMounted(fetchSubjects);
+onMounted(() => fetchSubjects());
 
 async function addSubject() {
   const token = localStorage.getItem('token');
@@ -122,7 +135,7 @@ async function addSubject() {
     });
 
     if (response.ok) {
-      await fetchSubjects();
+      await fetchSubjects(true); // Force cache bypass after add/edit
       subjectName.value = '';
       subjectDesc.value = '';
       editingId.value = null;
@@ -166,7 +179,7 @@ async function deleteSubject(id) {
     });
 
     if (response.ok) {
-      await fetchSubjects();
+      await fetchSubjects(true); // Force cache bypass after delete
       if (editingId.value === id) {
         cancelEdit();
       }
@@ -196,35 +209,5 @@ function logout() {
 </script>
 
 <style scoped>
-.custom-btn-action {
-  background-color: #5dbeff; /* Electric blue for small filled buttons */
-  border-color: #5dbeff;
-  color: #1a0f2d; /* Dark text for contrast */
-  border-radius: 5px;
-  font-weight: bold;
-  padding: 5px 10px;
-  font-size: 0.85rem;
-  transition: all 0.3s ease;
-}
-.custom-btn-action:hover {
-  background-color: #2a9dff;
-  border-color: #2a9dff;
-  transform: translateY(-1px);
-}
-
-.custom-btn-action-danger {
-  background-color: #e060a8; /* Neon pink for small danger buttons */
-  border-color: #e060a8;
-  color: #1a0f2d; /* Dark text for contrast */
-  border-radius: 5px;
-  font-weight: bold;
-  padding: 5px 10px;
-  font-size: 0.85rem;
-  transition: all 0.3s ease;
-}
-.custom-btn-action-danger:hover {
-  background-color: #c04080;
-  border-color: #c04080;
-  transform: translateY(-1px);
-}
+/* No component-specific styles needed here if all are common and in admin.css */
 </style>

@@ -1,6 +1,6 @@
 import os
-from datetime import datetime, timedelta, date 
-from flask import Flask, request, jsonify, make_response
+from datetime import datetime, timedelta, date
+from flask import Flask, request, jsonify, make_response, send_file
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity,verify_jwt_in_request
@@ -9,30 +9,35 @@ from flask_restful import Api, Resource
 from functools import wraps
 from flask_cors import cross_origin,CORS
 import json
+from io import BytesIO
+
 from extensions import db
 from model import User, Quiz, Admin, Chapter, Subject, Question, Score, UserAnswer
+from celery_worker import celery, export_users_csv, generate_monthly_report
+from flask_caching import Cache
 
-
-# Create an admin user if it doesn't exist (renamed for consistency with call)
 def create_admin_user():
-
     admin_username = "Tripti Jha"
     admin_password = "tripti123"
     admin_email = "tripti@gmail.com"
     print(f"DEBUG: Hashing admin password with key: {app.config['JWT_SECRET_KEY']}")
-    # Check if admin already exists
     with db.session.no_autoflush:
         admin = Admin.query.filter_by(email=admin_email).first()
         if not admin:
             hashed_password = generate_password_hash(admin_password)
-            new_admin = Admin(username=admin_username,password=hashed_password,email=admin_email)
+            new_admin = Admin(
+                username=admin_username,
+                password=hashed_password,
+                email=admin_email
+            )
             db.session.add(new_admin)
             db.session.commit()
             print("Admin user created.")
         else:
             print("Admin user already exists.")
 
-# Create Flask app and configure it
+cache = Cache()
+
 def create_app():
     app = Flask(__name__)
     api = Api(app)
@@ -42,6 +47,13 @@ def create_app():
     app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=24)
     app.config["JWT_SECRET_KEY"] = os.environ.get("FLASK_JWT_SECRET", "MY_PROJECT_SECRET_KEY_XYZ")
     print(f"DEBUG: Active JWT_SECRET_KEY: {app.config['JWT_SECRET_KEY']}")
+
+    app.config['CACHE_TYPE'] = 'RedisCache'
+    app.config['CACHE_REDIS_HOST'] = 'localhost'
+    app.config['CACHE_REDIS_PORT'] = 6379
+    app.config['CACHE_REDIS_DB'] = 1
+    app.config['CACHE_REDIS_URL'] = 'redis://localhost:6379/1'
+    app.config['CACHE_DEFAULT_TIMEOUT'] = 300
 
     db.init_app(app)
     jwt = JWTManager(app)
@@ -63,24 +75,23 @@ def create_app():
     def expired_token_response(callback):
         return jsonify({"message": "Token has expired"}), 401
 
+    cache.init_app(app)
     return app, api, jwt
 
 app, api, jwt = create_app()
 print(f"DEBUG: Active JWT_SECRET_KEY: {app.config['JWT_SECRET_KEY']}")
-
 
 @app.cli.command("create-db")
 def create_db_command():
     """Create database tables and seed initial admin user."""
     with app.app_context():
         print("Creating database tables...")
-        db.drop_all() # Added db.drop_all() for a clean start
+        db.drop_all()
         db.create_all()
         print("Database tables created.")
-        create_admin_user() # Call the renamed function
+        create_admin_user()
         print("Admin user setup complete.")
 
-# Custom decorator for admin-only endpoints
 def admin_required():
     def wrapper(fn):
         @wraps(fn)
@@ -92,31 +103,26 @@ def admin_required():
                 print(f"DEBUG: current_user identity within decorator: {current_user}")
 
                 if not current_user:
-                    print("DEBUG: current_user is None or empty.")
                     return {'message': 'Admin access required (identity missing)'}, 403
                 
                 if current_user.get('role') != 'admin':
-                    print(f"DEBUG: User role '{current_user.get('role')}' is not 'admin'.")
                     return {'message': 'Admin access required (role mismatch)'}, 403
                 
-                print("DEBUG: Admin role check passed. Proceeding to endpoint.")
                 return fn(*args, **kwargs)
             except Exception as e:
-                print(f"DEBUG: Exception caught in admin_required decorator: {e}")
                 import traceback
                 traceback.print_exc()
                 return {'message': 'Authentication error processing token internally: ' + str(e)}, 401
         return decorator
     return wrapper
 
-# Test route
 class HelloWorld(Resource):
     def get(self):
         return {'hello': 'world'}
 
-# Register Resource
 class Register(Resource):
     def post(self):
+        cache.clear() # Registration affects overall user count, so clear cache
         data = request.get_json()
         if not data:
             return {'message': 'No input data provided'}, 400
@@ -139,15 +145,19 @@ class Register(Resource):
             return {'message': 'Invalid date format for DOB. Use YYYY-MM-DD.'}, 400
 
         hashed_password = generate_password_hash(password)
-        new_user = User(email=email,password=hashed_password,full_name=full_name,qualification=qualification,dob=dob,role='user')
+        new_user = User(
+            email=email,
+            password=hashed_password,
+            full_name=full_name,
+            qualification=qualification,
+            dob=dob,
+            role='user'
+        )
         db.session.add(new_user)
         db.session.commit()
         return {'message': 'User registered successfully'}, 201
 
 
-
-
-#Login Resource 
 class Login(Resource):
     def post(self):
         data = request.get_json()
@@ -171,13 +181,24 @@ class Login(Resource):
 
 class Subjects(Resource):
     @admin_required()
+    @cache.cached(timeout=60, query_string=True)
     def get(self):
-        subjects = Subject.query.all()
+        search_query = request.args.get('query', type=str, default='').strip()
+        
+        if search_query:
+            subjects = Subject.query.filter(
+                (Subject.name.ilike(f'%{search_query}%')) |
+                (Subject.description.ilike(f'%{search_query}%'))
+            ).all()
+        else:
+            subjects = Subject.query.all()
+
         return [{'id': s.id, 'name': s.name, 'description': s.description} for s in subjects], 200
 
 
     @admin_required()
     def post(self):
+        cache.clear() # Clears ALL cache in the configured DB (DB 1 for Flask-Caching)
         data = request.get_json()
         name = data.get('name')
         description = data.get('description', '')
@@ -193,21 +214,22 @@ class Subjects(Resource):
 
 class SubjectResource(Resource):
     @admin_required()
+    @cache.cached(timeout=60) # Cache for 60 seconds
     def get(self, subject_id):
-        subject = db.session.get(Subject, subject_id) # Using db.session.get
+        subject = db.session.get(Subject, subject_id)
         if not subject:
             return {'message': 'Subject not found'}, 404
         return {'id': subject.id, 'name': subject.name, 'description': subject.description}, 200
 
     @admin_required()
     def put(self, subject_id):
+        cache.clear() # Clears ALL cache after modification
         subject = db.session.get(Subject, subject_id)
         if not subject:
             return {'message': 'Subject not found'}, 404
-
         data = request.get_json()
-        name = data.get('name')
-        description = data.get('description', '')
+        name = data.get('name', subject.name)
+        description = data.get('description', subject.description)
 
         if not name:
             return {'message': 'Subject name is required'}, 400
@@ -222,6 +244,7 @@ class SubjectResource(Resource):
 
     @admin_required()
     def delete(self, subject_id):
+        cache.clear() # Clears ALL cache after deletion
         subject = db.session.get(Subject, subject_id)
         if not subject:
             return {'message': 'Subject not found'}, 404
@@ -231,28 +254,30 @@ class SubjectResource(Resource):
         return {'message': 'Subject deleted successfully'}, 204
 
 
-##_______________create chapter resource____________________##
 class ChaptersBySubject(Resource):
     @admin_required()
+    @cache.cached(timeout=60, query_string=True)
     def get(self, subject_id):
         subject = db.session.get(Subject, subject_id)
         if not subject:
             return {'message': 'Subject not found'}, 404
 
-        chapters = Chapter.query.filter_by(subject_id=subject_id).all()
-        return [{
-            'id': c.id,
-            'subject_id': c.subject_id,
-            'name': c.name,
-            'description': c.description
-        } for c in chapters], 200
+        search_query = request.args.get('query', type=str, default='').strip()
+        
+        if search_query:
+            chapters = Chapter.query.filter(
+                Chapter.subject_id == subject_id,
+                (Chapter.name.ilike(f'%{search_query}%')) |
+                (Chapter.description.ilike(f'%{search_query}%'))
+            ).all()
+        else:
+            chapters = Chapter.query.filter_by(subject_id=subject_id).all()
+
+        return [{'id': c.id, 'subject_id': c.subject_id, 'name': c.name, 'description': c.description} for c in chapters], 200
 
     @admin_required()
     def post(self, subject_id):
-        subject = db.session.get(Subject, subject_id)
-        if not subject:
-            return {'message': 'Subject not found'}, 404
-
+        cache.clear() # Clears ALL cache after modification
         data = request.get_json()
         name = data.get('name')
         description = data.get('description', '')
@@ -279,6 +304,7 @@ class ChaptersBySubject(Resource):
 
 class ChapterResource(Resource):
     @admin_required()
+    @cache.cached(timeout=60) # Cache for 60 seconds
     def get(self, chapter_id):
         chapter = db.session.get(Chapter, chapter_id)
         if not chapter:
@@ -292,13 +318,13 @@ class ChapterResource(Resource):
 
     @admin_required()
     def put(self, chapter_id):
+        cache.clear() # Clears ALL cache after modification
         chapter = db.session.get(Chapter, chapter_id)
         if not chapter:
             return {'message': 'Chapter not found'}, 404
-
         data = request.get_json()
-        name = data.get('name')
-        description = data.get('description', '')
+        name = data.get('name', chapter.name)
+        description = data.get('description', chapter.description)
         subject_id = data.get('subject_id', chapter.subject_id)
 
         if not name:
@@ -321,6 +347,7 @@ class ChapterResource(Resource):
 
     @admin_required()
     def delete(self, chapter_id):
+        cache.clear() # Clears ALL cache after deletion
         chapter = db.session.get(Chapter, chapter_id)
         if not chapter:
             return {'message': 'Chapter not found'}, 404
@@ -332,27 +359,28 @@ class ChapterResource(Resource):
 
 class QuizzesByChapter(Resource):
     @admin_required()
+    @cache.cached(timeout=60, query_string=True)
     def get(self, chapter_id):
         chapter = db.session.get(Chapter, chapter_id)
         if not chapter:
             return {'message': 'Chapter not found'}, 404
 
-        quizzes = Quiz.query.filter_by(chapter_id=chapter_id).all()
-        return [{
-            'id': q.id,
-            'chapter_id': q.chapter_id,
-            'title': q.title,
-            'description': q.description,
-            'time_duration': q.time_duration,
-            'date_of_quiz': q.date_of_quiz.isoformat()
-        } for q in quizzes], 200
+        search_query = request.args.get('query', type=str, default='').strip()
+        
+        if search_query:
+            quizzes = Quiz.query.filter(
+                Quiz.chapter_id == chapter_id,
+                (Quiz.title.ilike(f'%{search_query}%')) |
+                (Quiz.description.ilike(f'%{search_query}%'))
+            ).all()
+        else:
+            quizzes = Quiz.query.filter_by(chapter_id=chapter_id).all()
+
+        return [{'id': q.id, 'chapter_id': q.chapter_id, 'title': q.title, 'description': q.description, 'time_duration': q.time_duration, 'date_of_quiz': q.date_of_quiz.isoformat()} for q in quizzes], 200
 
     @admin_required()
     def post(self, chapter_id):
-        chapter = db.session.get(Chapter, chapter_id)
-        if not chapter:
-            return {'message': 'Chapter not found'}, 404
-
+        cache.clear()
         data = request.get_json()
         title = data.get('title')
         description = data.get('description', '')
@@ -390,6 +418,7 @@ class QuizzesByChapter(Resource):
 
 class QuizResource(Resource):
     @admin_required()
+    @cache.cached(timeout=60) # Cache for 60 seconds
     def get(self, quiz_id):
         quiz = db.session.get(Quiz, quiz_id)
         if not quiz:
@@ -405,15 +434,15 @@ class QuizResource(Resource):
 
     @admin_required()
     def put(self, quiz_id):
+        cache.clear()
         quiz = db.session.get(Quiz, quiz_id)
         if not quiz:
             return {'message': 'Quiz not found'}, 404
-
         data = request.get_json()
-        title = data.get('title')
-        description = data.get('description', '')
-        time_duration = data.get('time_duration')
-        date_of_quiz_str = data.get('date_of_quiz')
+        title = data.get('title', quiz.title)
+        description = data.get('description', quiz.description)
+        time_duration = data.get('time_duration', quiz.time_duration)
+        date_of_quiz_str = data.get('date_of_quiz', quiz.date_of_quiz.isoformat())
         chapter_id = data.get('chapter_id', quiz.chapter_id)
 
         if not all([title, time_duration, date_of_quiz_str]):
@@ -434,17 +463,11 @@ class QuizResource(Resource):
         quiz.date_of_quiz = date_of_quiz
         quiz.chapter_id = chapter_id
         db.session.commit()
-        return {
-            'id': quiz.id,
-            'chapter_id': quiz.chapter_id,
-            'title': quiz.title,
-            'description': quiz.description,
-            'time_duration': quiz.time_duration,
-            'date_of_quiz': quiz.date_of_quiz.isoformat()
-        }, 200
+        return {'id': quiz.id, 'chapter_id': quiz.chapter_id, 'title': quiz.title, 'description': quiz.description, 'time_duration': quiz.time_duration, 'date_of_quiz': quiz.date_of_quiz.isoformat()}, 200
 
     @admin_required()
     def delete(self, quiz_id):
+        cache.clear()
         quiz = db.session.get(Quiz, quiz_id)
         if not quiz:
             return {'message': 'Quiz not found'}, 404
@@ -453,34 +476,20 @@ class QuizResource(Resource):
         db.session.commit()
         return {'message': 'Quiz deleted successfully'}, 204
 
-# --- NEW API RESOURCES FOR QUESTIONS ---
-
-# Resource for fetching all questions for a specific quiz, or adding a new question
 class QuestionsByQuiz(Resource):
     @admin_required()
+    @cache.cached(timeout=60) # Cache for 60 seconds
     def get(self, quiz_id):
         quiz = db.session.get(Quiz, quiz_id)
         if not quiz:
             return {'message': 'Quiz not found'}, 404
 
         questions = Question.query.filter_by(quiz_id=quiz_id).all()
-        return [{
-            'id': q.id,
-            'quiz_id': q.quiz_id,
-            'question_text': q.question_text,
-            'option1': q.option1,
-            'option2': q.option2,
-            'option3': q.option3,
-            'option4': q.option4,
-            'correct_option': q.correct_option
-        } for q in questions], 200
+        return [{'id': q.id, 'quiz_id': q.quiz_id, 'question_text': q.question_text, 'option1': q.option1, 'option2': q.option2, 'option3': q.option3, 'option4': q.option4, 'correct_option': q.correct_option} for q in questions], 200
 
     @admin_required()
     def post(self, quiz_id):
-        quiz = db.session.get(Quiz, quiz_id)
-        if not quiz:
-            return {'message': 'Quiz not found'}, 404
-
+        cache.clear()
         data = request.get_json()
         question_text = data.get('question_text')
         option1 = data.get('option1')
@@ -489,7 +498,7 @@ class QuestionsByQuiz(Resource):
         option4 = data.get('option4')
         correct_option = data.get('correct_option')
 
-        if not all([question_text, option1, option2, correct_option is not None]): # Check correct_option is provided
+        if not all([question_text, option1, option2, correct_option is not None]):
             return {'message': 'Question text, option1, option2, and correct option are required'}, 400
         
         if correct_option not in [1, 2, 3, 4]:
@@ -517,9 +526,9 @@ class QuestionsByQuiz(Resource):
             'correct_option': new_question.correct_option
         }, 201
 
-# Resource for operations on a single question by its ID
 class QuestionResource(Resource):
     @admin_required()
+    @cache.cached(timeout=60) # Cache for 60 seconds
     def get(self, question_id):
         question = db.session.get(Question, question_id)
         if not question:
@@ -537,17 +546,17 @@ class QuestionResource(Resource):
 
     @admin_required()
     def put(self, question_id):
+        cache.clear()
         question = db.session.get(Question, question_id)
         if not question:
             return {'message': 'Question not found'}, 404
-
         data = request.get_json()
-        question_text = data.get('question_text')
-        option1 = data.get('option1')
-        option2 = data.get('option2')
-        option3 = data.get('option3')
-        option4 = data.get('option4')
-        correct_option = data.get('correct_option')
+        question_text = data.get('question_text', question.question_text)
+        option1 = data.get('option1', question.option1)
+        option2 = data.get('option2', question.option2)
+        option3 = data.get('option3', question.option3)
+        option4 = data.get('option4', question.option4)
+        correct_option = data.get('correct_option', question.correct_option)
         quiz_id = data.get('quiz_id', question.quiz_id)
 
         if not all([question_text, option1, option2, correct_option is not None]):
@@ -564,19 +573,11 @@ class QuestionResource(Resource):
         question.correct_option = correct_option
         question.quiz_id = quiz_id
         db.session.commit()
-        return {
-            'id': question.id,
-            'quiz_id': question.quiz_id,
-            'question_text': question.question_text,
-            'option1': question.option1,
-            'option2': question.option2,
-            'option3': question.option3,
-            'option4': question.option4,
-            'correct_option': question.correct_option
-        }, 200
+        return {'id': question.id, 'quiz_id': question.quiz_id, 'question_text': question.question_text, 'option1': question.option1, 'option2': question.option2, 'option3': question.option3, 'option4': question.option4, 'correct_option': question.correct_option}, 200
 
     @admin_required()
     def delete(self, question_id):
+        cache.clear()
         question = db.session.get(Question, question_id)
         if not question:
             return {'message': 'Question not found'}, 404
@@ -585,36 +586,133 @@ class QuestionResource(Resource):
         db.session.commit()
         return {'message': 'Question deleted successfully'}, 204
 
-# --- Admin-only User Management Resource ---
-
 class AdminUsers(Resource):
     @admin_required()
+    @cache.cached(timeout=60) # Cache for 60 seconds
     def get(self):
         users = User.query.all()
-        return [{'id': u.id,'email': u.email,'full_name': u.full_name,'qualification': u.qualification,'dob': u.dob.isoformat() if u.dob else None,'role': getattr(u, 'role', 'N/A') # Use getattr to safely get 'role', default to 'N/A' if not found
+        return [{'id': u.id,'email': u.email,'full_name': u.full_name,'qualification': u.qualification,'dob': u.dob.isoformat() if u.dob else None,'role': getattr(u, 'role', 'N/A')
             } for u in users], 200
     def options(self):
-        return {'Allow': 'GET, POST, PUT, DELETE, OPTIONS'}, 200 # Include all methods your resource supports
+        return {'Allow': 'GET, POST, PUT, DELETE, OPTIONS'}, 200
 
 class AdminUserResource(Resource):
     @admin_required()
     def delete(self, user_id):
-        user = User.query.get(user_id)
+        cache.clear()
+        user = db.session.get(User, user_id)
         if not user:
             return {'message': 'User not found'}, 404
         
-        # Optionally, delete user's scores or related records here if needed
         db.session.delete(user)
         db.session.commit()
         return {'message': f'User with ID {user_id} deleted successfully'}, 204
 
 
+class AdminDashboardStats(Resource):
+    @admin_required()
+    @cache.cached(timeout=60) # Cache for 60 seconds
+    def get(self):
+        total_users = User.query.count()
+        total_subjects = Subject.query.count()
+        total_chapters = Chapter.query.count()
+        total_quizzes = Quiz.query.count()
+        total_questions = Question.query.count()
+        total_scores = Score.query.count()
+
+        all_scores = [s.score for s in Score.query.all()]
+        average_score = sum(all_scores) / len(all_scores) if all_scores else 0
+
+        return {
+            'total_users': total_users,
+            'total_subjects': total_subjects,
+            'total_chapters': total_chapters,
+            'total_quizzes': total_quizzes,
+            'total_questions': total_questions,
+            'total_scores': total_scores,
+            'average_score': round(average_score, 2)
+        }, 200
+
+    def options(self):
+        return {'Allow': 'GET, OPTIONS'}, 200
+
+
+class AdminReportExport(Resource):
+    @admin_required()
+    def post(self):
+        cache.clear()
+        try:
+            result = export_users_csv.apply_async()
+            csv_content = result.get(timeout=60)
+
+            if isinstance(csv_content, dict) and csv_content.get('status') == 'error':
+                return {'message': csv_content.get('message', 'Failed to generate CSV report')}, 500
+
+            buffer = BytesIO(csv_content.encode('utf-8'))
+            buffer.seek(0)
+
+            return send_file(
+                buffer,
+                mimetype='text/csv',
+                as_attachment=True,
+                download_name='users_report.csv'
+            )
+
+        except TimeoutError:
+            print("ERROR: Celery task timed out.")
+            return {'message': 'CSV export task timed out. Please try again later.'}, 504
+        except Exception as e:
+            print(f"ERROR: Failed to initiate CSV export: {e}")
+            import traceback
+            traceback.print_exc()
+            return {'message': 'Failed to initiate CSV export or process result'}, 500
+
+    def options(self):
+        return {'Allow': 'POST, OPTIONS'}, 200
+
+
+class AdminMonthlyReportTrigger(Resource):
+    @admin_required()
+    def post(self):
+        cache.clear()
+        try:
+            result = generate_monthly_report.apply_async()
+            report_html_content = result.get(timeout=60)
+
+            if isinstance(report_html_content, dict) and report_html_content.get('status') == 'error':
+                return {'message': report_html_content.get('message', 'Failed to generate monthly report')}, 500
+
+            buffer = BytesIO(report_html_content.encode('utf-8'))
+            buffer.seek(0)
+
+            return send_file(
+                buffer,
+                mimetype='text/html',
+                as_attachment=True,
+                download_name=f'monthly_report_{datetime.now().strftime("%Y%m%d_%H%M%S")}.html'
+            )
+
+        except TimeoutError:
+            print("ERROR: Celery task timed out.")
+            return {'message': 'Monthly report task timed out. Please try again later.'}, 504
+        except Exception as e:
+            print(f"ERROR: Failed to initiate monthly report: {e}")
+            import traceback
+            traceback.print_exc()
+            return {'message': 'Failed to initiate monthly report generation or process result'}, 500
+
+    def options(self):
+        return {'Allow': 'POST, OPTIONS'}, 200
+
 class UserAccessibleSubjects(Resource):
         @jwt_required()
+        @cache.cached(timeout=60) # Cache for 60 seconds
         def get(self):
             subjects = Subject.query.all()
             return [{'id': s.id, 'name': s.name, 'description': s.description} for s in subjects], 200
 
+        def options(self):
+            return {'Allow': 'GET, OPTIONS'}, 200
 
 class UserProfileResource(Resource):
     @jwt_required() # Protected, but not necessarily admin_required
@@ -669,139 +767,131 @@ class UserProfileResource(Resource):
     def options(self, user_id): # user_id is passed but not used for OPTIONS
         return {'Allow': 'GET, PUT, OPTIONS'}, 200 # Include methods this resource supports
 
-    # Resource for fetching chapters for regular users (not admin_required)
+
+
 class UserAccessibleChaptersBySubject(Resource):
     @jwt_required()
+    @cache.cached(timeout=60) # Cache for 60 seconds
     def get(self, subject_id):
         subject = db.session.get(Subject, subject_id)
         if not subject:
             return {'message': 'Subject not found'}, 404
 
         chapters = Chapter.query.filter_by(subject_id=subject_id).all()
-        return [{
-            'id': c.id,
-            'subject_id': c.subject_id,
-            'name': c.name,
-            'description': c.description
-        } for c in chapters], 200
+        return [{'id': c.id, 'subject_id': c.subject_id, 'name': c.name, 'description': c.description} for c in chapters], 200
 
-    # Resource for fetching quizzes for regular users (not admin_required)
+    def options(self, subject_id):
+        return {'Allow': 'GET, OPTIONS'}, 200
+
 class UserAccessibleQuizzesByChapter(Resource):
     @jwt_required()
+    @cache.cached(timeout=60) # Cache for 60 seconds
     def get(self, chapter_id):
         chapter = db.session.get(Chapter, chapter_id)
         if not chapter:
             return {'message': 'Chapter not found'}, 404
 
         quizzes = Quiz.query.filter_by(chapter_id=chapter_id).all()
-        return [{
-            'id': q.id,
-            'chapter_id': q.chapter_id,
-            'title': q.title,
-            'description': q.description,
-            'time_duration': q.time_duration,
-            'date_of_quiz': q.date_of_quiz.isoformat()
-        } for q in quizzes], 200
+        return [{'id': q.id, 'chapter_id': q.chapter_id, 'title': q.title, 'description': q.description, 'time_duration': q.time_duration, 'date_of_quiz': q.date_of_quiz.isoformat()} for q in quizzes], 200
 
-    # Resource for fetching questions for regular users (not admin_required)
+    def options(self, chapter_id):
+        return {'Allow': 'GET, OPTIONS'}, 200
+
 class UserAccessibleQuestionsByQuiz(Resource):
     @jwt_required()
+    @cache.cached(timeout=60) # Cache for 60 seconds
     def get(self, quiz_id):
         quiz = db.session.get(Quiz, quiz_id)
         if not quiz:
             return {'message': 'Quiz not found'}, 404
 
         questions = Question.query.filter_by(quiz_id=quiz_id).all()
-        # IMPORTANT: Do NOT send correct_option to the frontend for users
-        return [{
-            'id': q.id,
-            'quiz_id': q.quiz_id,
-            'question_text': q.question_text,
-            'option1': q.option1,
-            'option2': q.option2,
-            'option3': q.option3,
-            'option4': q.option4,
-            # 'correct_option': q.correct_option # <--- DO NOT SEND THIS FOR USERS
-        } for q in questions], 200
+        return [{'id': q.id, 'quiz_id': q.quiz_id, 'question_text': q.question_text, 'option1': q.option1, 'option2': q.option2, 'option3': q.option3, 'option4': q.option4, 'correct_option': q.correct_option} for q in questions], 200
+
+    def options(self, quiz_id):
+        return {'Allow': 'GET, OPTIONS'}, 200
 
 
 class QuizAttemptSubmit(Resource):
     @jwt_required()
     def post(self):
-        raw_identity = get_jwt_identity()
-        current_user_identity = json.loads(raw_identity)
-        user_id = current_user_identity['id']
+        cache.clear() # Clears ALL cache after modification
+        try:
+            raw_identity = get_jwt_identity()
+            current_user_identity = json.loads(raw_identity)
+            user_id = current_user_identity['id']
 
-        data = request.get_json()
-        quiz_id = data.get('quiz_id')
-        answers = data.get('answers') # List of {'question_id': ..., 'selected_option': ...}
+            data = request.get_json()
+            quiz_id = data.get('quiz_id')
+            answers = data.get('answers')
 
-        if not all([quiz_id, answers]):
-            return {'message': 'Quiz ID and answers are required'}, 400
+            if not all([quiz_id, answers]):
+                return {'message': 'Quiz ID and answers are required'}, 400
 
-        quiz = Quiz.query.get(quiz_id)
-        if not quiz:
-            return {'message': 'Quiz not found'}, 404
+            quiz = db.session.get(Quiz, quiz_id)
+            if not quiz:
+                return {'message': 'Quiz not found'}, 404
 
-        # Fetch all correct answers for this quiz's questions from the backend
-        quiz_questions = Question.query.filter_by(quiz_id=quiz_id).all()
-        correct_answers_map = {q.id: q.correct_option for q in quiz_questions}
+            quiz_questions = Question.query.filter_by(quiz_id=quiz_id).all()
+            correct_answers_map = {q.id: q.correct_option for q in quiz_questions}
 
-        calculated_score = 0
-        correct_answers_count = 0
-        
-        # Process and save each user answer, and calculate score
-        for answer_data in answers:
-            question_id = answer_data.get('question_id')
-            selected_option = answer_data.get('selected_option')
+            calculated_score = 0
+            correct_answers_count = 0
+            
+            for answer_data in answers:
+                question_id = answer_data.get('question_id')
+                selected_option = answer_data.get('selected_option')
 
-            if question_id not in correct_answers_map:
-                # Skip if question doesn't belong to this quiz or is invalid
-                continue
+                if question_id not in correct_answers_map:
+                    continue
 
-            # Save/Update UserAnswer
-            existing_user_answer = UserAnswer.query.filter_by(
-                user_id=user_id,
-                quiz_id=quiz_id,
-                question_id=question_id
-            ).first()
-
-            if existing_user_answer:
-                existing_user_answer.selected_option = selected_option
-                existing_user_answer.attempt_timestamp = datetime.utcnow()
-            else:
-                new_user_answer = UserAnswer(
+                existing_user_answer = UserAnswer.query.filter_by(
                     user_id=user_id,
                     quiz_id=quiz_id,
-                    question_id=question_id,
-                    selected_option=selected_option,
-                    attempt_timestamp=datetime.utcnow()
-                )
-                db.session.add(new_user_answer)
+                    question_id=question_id
+                ).first()
+
+                if existing_user_answer:
+                    existing_user_answer.selected_option = selected_option
+                    existing_user_answer.attempt_timestamp = datetime.utcnow()
+                else:
+                    new_user_answer = UserAnswer(
+                        user_id=user_id,
+                        quiz_id=quiz_id,
+                        question_id=question_id,
+                        selected_option=selected_option,
+                        attempt_timestamp=datetime.utcnow()
+                    )
+                    db.session.add(new_user_answer)
+                
+                if selected_option == correct_answers_map[question_id]:
+                    calculated_score += 1
+                    correct_answers_count += 1
             
-            # Calculate score
-            if selected_option == correct_answers_map[question_id]:
-                calculated_score += 1
-                correct_answers_count += 1
-        
-        db.session.commit() 
-        new_score_entry = Score(
-            user_id=user_id,
-            quiz_id=quiz_id,
-            score=calculated_score,
-            attempt_timestamp=datetime.utcnow()
-        )
-        db.session.add(new_score_entry)
-        db.session.commit()
+            db.session.commit()
+            new_score_entry = Score(
+                user_id=user_id,
+                quiz_id=quiz_id,
+                score=calculated_score,
+                attempt_timestamp=datetime.utcnow()
+            )
+            db.session.add(new_score_entry)
+            db.session.commit()
 
-        return {
-            'message': 'Quiz submitted successfully!',
-            'final_score': calculated_score,
-            'correct_answers_count': correct_answers_count,
-            'total_questions': len(quiz_questions)
-        }, 200
+            return {
+                'message': 'Quiz submitted successfully!',
+                'final_score': calculated_score,
+                'correct_answers_count': correct_answers_count,
+                'total_questions': len(quiz_questions)
+            }, 200
+        except Exception as e:
+            print(f"ERROR: Quiz submission failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return {'message': 'Quiz submission failed internally'}, 500
 
-
+    def options(self):
+        return {'Allow': 'POST, OPTIONS'}, 200
 
 
 class UserScores(Resource):
@@ -851,9 +941,28 @@ class UserScores(Resource):
         db.session.commit()
         return {'message': 'Score saved successfully', 'score_id': new_score.id}, 201
 
+
 class UserAnswers(Resource):
     @jwt_required()
+    @cache.cached(timeout=60, key_prefix='user_answers', make_cache_key=lambda *args, **kwargs: str(json.loads(get_jwt_identity())['id']) + str(kwargs['quiz_id']) + str(kwargs['question_id']))
+    def get(self, quiz_id, question_id): # This GET method is not used in frontend, but good for completeness
+        raw_identity = get_jwt_identity()
+        current_user_identity = json.loads(raw_identity)
+        user_id = current_user_identity['id']
+
+        user_answer = UserAnswer.query.filter_by(
+            user_id=user_id,
+            quiz_id=quiz_id,
+            question_id=question_id
+        ).first()
+
+        if not user_answer:
+            return {'message': 'Answer not found'}, 404
+        return user_answer.as_dict(), 200
+
+    @jwt_required()
     def post(self):
+        cache.clear() # Clears ALL cache after modification
         raw_identity = get_jwt_identity()
         current_user_identity = json.loads(raw_identity)
         user_id = current_user_identity['id']
@@ -880,8 +989,6 @@ class UserAnswers(Resource):
         if existing_answer:
             existing_answer.selected_option = selected_option
             existing_answer.attempt_timestamp = datetime.utcnow()
-            db.session.commit()
-            return {'message': 'User answer updated successfully', 'answer_id': existing_answer.id}, 200
         else:
             new_answer = UserAnswer(
                 user_id=user_id,
@@ -891,15 +998,42 @@ class UserAnswers(Resource):
                 attempt_timestamp=datetime.utcnow()
             )
             db.session.add(new_answer)
-            db.session.commit()
-            return {'message': 'User answer saved successfully', 'answer_id': new_answer.id}, 201
+        
+        db.session.commit()
+        return {'message': 'User answer saved successfully', 'answer_id': new_answer.id}, 201
 
+    def options(self):
+        return {'Allow': 'POST, OPTIONS'}, 200
 
+class UserAccessibleAllQuizzes(Resource):
+    @jwt_required()
+    @cache.cached(timeout=60) # Cache for 60 seconds
+    def get(self):
+        quizzes = Quiz.query.all()
+        return [{'id': q.id, 'chapter_id': q.chapter_id, 'title': q.title, 'description': q.description, 'time_duration': q.time_duration, 'date_of_quiz': q.date_of_quiz.isoformat()} for q in quizzes], 200
 
+    def options(self):
+        return {'Allow': 'GET, OPTIONS'}, 200
 
+class UserDashboardStats(Resource):
+    @jwt_required()
+    @cache.cached(timeout=60, key_prefix='user_dashboard_stats', make_cache_key=lambda *args, **kwargs: str(json.loads(get_jwt_identity())['id']))
+    def get(self):
+        raw_identity = get_jwt_identity()
+        current_user_identity = json.loads(raw_identity)
+        user_id = current_user_identity['id']
 
+        total_quizzes_attempted = Score.query.filter_by(user_id=user_id).count()
+        user_scores = Score.query.filter_by(user_id=user_id).all()
+        average_user_score = sum(s.score for s in user_scores) / len(user_scores) if user_scores else 0
 
+        return {
+            'total_quizzes_attempted': total_quizzes_attempted,
+            'average_user_score': round(average_user_score, 2)
+        }, 200
 
+    def options(self):
+        return {'Allow': 'GET, OPTIONS'}, 200
 
 # Register the resource with the API
 api.add_resource(HelloWorld, '/')
@@ -920,10 +1054,14 @@ api.add_resource(UserAccessibleQuestionsByQuiz, '/api/user/quizzes/<int:quiz_id>
 api.add_resource(QuizAttemptSubmit, '/api/quiz_attempt_submit')
 api.add_resource(AdminUsers, '/api/admin/users')
 api.add_resource(AdminUserResource, '/api/admin/users/<int:user_id>')
-
 api.add_resource(UserProfileResource, '/api/users/<int:user_id>')
 api.add_resource(UserScores, '/api/scores')
 api.add_resource(UserAnswers, '/api/user_answers')
+api.add_resource(UserAccessibleAllQuizzes, '/api/quizzes/all')
+api.add_resource(AdminDashboardStats, '/api/admin/dashboard/stats')
+api.add_resource(UserDashboardStats, '/api/user/dashboard/stats')
+api.add_resource(AdminReportExport, '/api/admin/reports/export-csv')
+api.add_resource(AdminMonthlyReportTrigger, '/api/admin/reports/generate-monthly')
 
 
 if __name__ == "__main__":

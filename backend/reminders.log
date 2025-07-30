@@ -1,0 +1,13 @@
+2025-07-30 06:32:41,293 - celery_worker - INFO - 
+--- Running Monthly Activity Report Task ---
+2025-07-30 06:32:41,526 - celery_worker - INFO - REPORT GENERATED: Monthly report section for ashutosh@123 prepared.
+2025-07-30 06:32:41,530 - celery_worker - INFO - REPORT GENERATED: Monthly report section for admin@gmail prepared.
+2025-07-30 06:32:41,531 - celery_worker - INFO - --- Monthly Activity Report Task Finished. ---
+2025-07-30 06:32:50,791 - celery_worker - INFO - 
+--- GENERATED USER REPORT CSV (in worker) ---
+2025-07-30 06:32:50,791 - celery_worker - INFO - User ID,Email,Full Name,Qualification,DOB,Role,Quizzes Taken,Average Score
+1,ashutosh@123,ashutosh,12,2000-02-21,user,1,2.0
+2,admin@gmail,tripti,12,2004-02-19,user,0,0
+
+2025-07-30 06:32:50,792 - celery_worker - INFO - -------------------------------------------
+

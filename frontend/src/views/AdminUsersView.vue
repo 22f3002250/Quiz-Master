@@ -1,6 +1,5 @@
 <template>
   <div class="admin-layout-container">
-    <!-- Left Sidebar for Navigation -->
     <aside class="admin-sidebar">
       <h3 class="sidebar-title text-primary-neon">Admin Menu</h3>
       <nav class="sidebar-nav">
@@ -13,7 +12,6 @@
       <button @click="logout" class="btn btn-danger w-100 custom-btn-logout">Logout</button>
     </aside>
 
-    <!-- Main Content Area -->
     <main class="admin-main-content">
       <div class="card p-4 shadow-lg rounded-3 content-card">
         <h2 class="mb-4 text-center text-primary-neon">Manage Users</h2>
@@ -47,12 +45,15 @@ import { useRouter } from 'vue-router'
 const router = useRouter()
 const users = ref([])
 
-async function fetchUsers() {
+async function fetchUsers(bypassCache = false) {
   try {
     const token = localStorage.getItem('token');
     if (!token) { alert('Authentication token missing. Please log in.'); router.push('/login'); return; }
-    // MODIFIED: Use the correct endpoint for Admin to fetch all users
-    const response = await fetch('http://localhost:5000/api/admin/users', { // <--- CHANGED ENDPOINT
+    const url = new URL('http://localhost:5000/api/admin/users');
+    if (bypassCache) {
+      url.searchParams.append('cache_bust', Date.now());
+    }
+    const response = await fetch(url.toString(), {
       headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }
     });
     if (response.ok) { users.value = await response.json(); }
@@ -60,7 +61,7 @@ async function fetchUsers() {
   } catch (error) { console.error('Network error fetching users:', error); alert('Network error. Could not connect to the server.'); }
 }
 
-onMounted(fetchUsers);
+onMounted(() => fetchUsers());
 
 async function deleteUser(id) {
   if (!confirm('Are you sure you want to delete this user? This action cannot be undone.')) { return; }
@@ -68,13 +69,13 @@ async function deleteUser(id) {
   if (!token) { alert('Authentication token missing. Please log in.'); router.push('/login'); return; }
 
   try {
-    const response = await fetch(`http://localhost:5000/api/admin/users/${id}`, { // This endpoint is correct for DELETE
+    const response = await fetch(`http://localhost:5000/api/admin/users/${id}`, {
       method: 'DELETE',
       headers: { 'Authorization': `Bearer ${token}` }
     });
 
     if (response.ok) {
-      await fetchUsers(); // Re-fetch users
+      await fetchUsers(true); // Force cache bypass after delete
     } else {
       const errorData = await response.json();
       alert(`Failed to delete user: ${errorData.message || response.statusText}`);
@@ -90,35 +91,5 @@ function logout() {
 </script>
 
 <style scoped>
-.custom-btn-action {
-  background-color: #5dbeff; /* Electric blue for small filled buttons */
-  border-color: #5dbeff;
-  color: #1a0f2d; /* Dark text for contrast */
-  border-radius: 5px;
-  font-weight: bold;
-  padding: 5px 10px;
-  font-size: 0.85rem;
-  transition: all 0.3s ease;
-}
-.custom-btn-action:hover {
-  background-color: #2a9dff;
-  border-color: #2a9dff;
-  transform: translateY(-1px);
-}
-
-.custom-btn-action-danger {
-  background-color: #e060a8; /* Neon pink for small danger buttons */
-  border-color: #e060a8;
-  color: #1a0f2d; /* Dark text for contrast */
-  border-radius: 5px;
-  font-weight: bold;
-  padding: 5px 10px;
-  font-size: 0.85rem;
-  transition: all 0.3s ease;
-}
-.custom-btn-action-danger:hover {
-  background-color: #c04080;
-  border-color: #c04080;
-  transform: translateY(-1px);
-}
+/* No component-specific styles needed here if all are common and in admin.css */
 </style>

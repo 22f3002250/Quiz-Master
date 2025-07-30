@@ -1,6 +1,5 @@
 <template>
   <div class="admin-layout-container">
-    <!-- Left Sidebar for Navigation -->
     <aside class="admin-sidebar">
       <h3 class="sidebar-title text-primary-neon">Admin Menu</h3>
       <nav class="sidebar-nav">
@@ -13,7 +12,6 @@
       <button @click="logout" class="btn btn-danger w-100 custom-btn-logout">Logout</button>
     </aside>
 
-    <!-- Main Content Area -->
     <main class="admin-main-content">
       <div class="card p-4 shadow-lg rounded-3 content-card">
         <h2 class="mb-4 text-center text-primary-neon">Manage Quizzes</h2>
@@ -63,6 +61,12 @@
           <button v-if="editingQuizId" class="btn custom-btn-outline ms-2" @click="cancelEditQuiz">Cancel</button>
         </form>
 
+        <!-- Search Input Field for Quizzes -->
+        <div class="mb-3" v-if="selectedChapterId">
+          <label class="form-label text-light-accent">Search Quizzes</label>
+          <input v-model="searchQuizQuery" @input="fetchQuizzesWithSearch" class="form-control custom-input" placeholder="Search by title or description" />
+        </div>
+
         <!-- Quizzes List -->
         <h4 v-if="selectedChapterId" class="text-light-accent mb-3">Quizzes for {{ chapterName(selectedChapterId) }}</h4>
         <ul class="list-group custom-list-group" v-if="selectedChapterId">
@@ -70,19 +74,15 @@
             <span>
               <b class="text-primary-neon">{{ quiz.title }}</b> - <span class="text-light-accent">{{ quiz.description }}</span>
               <br>
-              <!-- MODIFIED: Apply text-light-accent to small tag for visibility -->
               <small class="text-light-accent">Duration: {{ quiz.time_duration }} mins | Date: {{ quiz.date_of_quiz }}</small>
             </span>
             <div>
-              <!-- MODIFIED: Apply custom-icon-btn class -->
               <button class="btn btn-sm custom-icon-btn me-2" @click="editQuiz(quiz)">
                 <i class="bi bi-pencil-fill"></i>
               </button>
-              <!-- MODIFIED: Apply custom-icon-btn-danger class -->
               <button class="btn btn-sm custom-icon-btn-danger me-2" @click="deleteQuiz(quiz.id)">
                 <i class="bi bi-trash-fill"></i>
               </button>
-              <!-- MODIFIED: Apply custom-btn-outline class -->
               <button class="btn btn-sm custom-btn-outline" @click="selectQuizForQuestions(quiz)">
                 Manage Questions
               </button>
@@ -107,11 +107,11 @@
               <label class="form-label text-light-accent">Option 2</label>
               <input v-model="option2" class="form-control custom-input" required />
             </div>
-            <div class="mb-2">
+            <div class="mb-2" v-if="questionText.length > 0"> <!-- Only show optional if question text exists -->
               <label class="form-label text-light-accent">Option 3 (Optional)</label>
               <input v-model="option3" class="form-control custom-input" />
             </div>
-            <div class="mb-2">
+            <div class="mb-2" v-if="questionText.length > 0"> <!-- Only show optional if question text exists -->
               <label class="form-label text-light-accent">Option 4 (Optional)</label>
               <input v-model="option4" class="form-control custom-input" />
             </div>
@@ -133,7 +133,6 @@
               <span>
                 <b class="text-primary-neon">Q: {{ question.question_text }}</b>
                 <br>
-                <!-- MODIFIED: Apply text-light-accent to small tag for visibility -->
                 <small class="text-light-accent">
                   1. {{ question.option1 }} <br>
                   2. {{ question.option2 }} <br>
@@ -143,11 +142,9 @@
                 </small>
               </span>
               <div>
-                <!-- MODIFIED: Apply custom-icon-btn class -->
                 <button class="btn btn-sm custom-icon-btn me-2" @click="editQuestion(question)">
                   <i class="bi bi-pencil-fill"></i>
                 </button>
-                <!-- MODIFIED: Apply custom-icon-btn-danger class -->
                 <button class="btn btn-sm custom-icon-btn-danger" @click="deleteQuestion(question.id)">
                   <i class="bi bi-trash-fill"></i>
                 </button>
@@ -176,12 +173,13 @@ const selectedSubjectId = ref('')
 const selectedChapterId = ref('')
 const quizTitle = ref('')
 const quizDescription = ref('')
-const quizDuration = ref(60) // Default to 60 minutes
-const quizDate = ref(new Date().toISOString().slice(0, 10)) // Default to today's date
+const quizDuration = ref(60)
+const quizDate = ref(new Date().toISOString().slice(0, 10))
 const editingQuizId = ref(null)
+const searchQuizQuery = ref(''); // Search query for quizzes
 
 // Question form refs
-const selectedQuizForQuestionsId = ref(null) // ID of the quiz whose questions are being managed
+const selectedQuizForQuestionsId = ref(null)
 const questionText = ref('')
 const option1 = ref('')
 const option2 = ref('')
@@ -190,8 +188,8 @@ const option4 = ref('')
 const correctOption = ref(1)
 const editingQuestionId = ref(null)
 
-// --- Computed Properties ---
 const filteredChapters = computed(() => {
+  // Filters the 'chapters' array based on selectedSubjectId
   return chapters.value.filter(c => c.subject_id === Number(selectedSubjectId.value))
 })
 
@@ -205,12 +203,15 @@ const chapterName = (id) => {
   return chap ? chap.name : ''
 }
 
-// --- Fetching Functions ---
-async function fetchSubjects() {
+async function fetchSubjects(bypassCache = false) {
   try {
     const token = localStorage.getItem('token');
     if (!token) { alert('Authentication token missing. Please log in.'); router.push('/login'); return; }
-    const response = await fetch('http://localhost:5000/api/subjects', {
+    const url = new URL('http://localhost:5000/api/subjects');
+    if (bypassCache) {
+      url.searchParams.append('cache_bust', Date.now());
+    }
+    const response = await fetch(url.toString(), {
       headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }
     });
     if (response.ok) { subjects.value = await response.json(); }
@@ -218,12 +219,22 @@ async function fetchSubjects() {
   } catch (error) { console.error('Network error fetching subjects:', error); alert('Network error. Could not connect to the server.'); }
 }
 
-async function fetchChapters(subjectId) {
+// MODIFIED: fetchChapters now accepts a search query and bypassCache
+async function fetchChapters(subjectId, query = '', bypassCache = false) {
   if (!subjectId) { chapters.value = []; return; }
   try {
     const token = localStorage.getItem('token');
     if (!token) { alert('Authentication token missing. Please log in.'); router.push('/login'); return; }
-    const response = await fetch(`http://localhost:5000/api/subjects/${subjectId}/chapters`, {
+    
+    const url = new URL(`http://localhost:5000/api/subjects/${subjectId}/chapters`);
+    if (query) {
+      url.searchParams.append('query', query);
+    }
+    if (bypassCache) {
+      url.searchParams.append('cache_bust', Date.now());
+    }
+
+    const response = await fetch(url.toString(), {
       headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }
     });
     if (response.ok) { chapters.value = await response.json(); }
@@ -231,12 +242,25 @@ async function fetchChapters(subjectId) {
   } catch (error) { console.error('Network error fetching chapters:', error); alert('Network error. Could not connect to the server.'); }
 }
 
-async function fetchQuizzes(chapterId) {
+const fetchChaptersWithSearch = (bypassCache = false) => {
+  fetchChapters(selectedSubjectId.value, '', bypassCache); // MODIFIED: Pass empty string for query, as this is for chapter dropdown
+};
+
+async function fetchQuizzes(chapterId, query = '', bypassCache = false) {
   if (!chapterId) { quizzes.value = []; return; }
   try {
     const token = localStorage.getItem('token');
     if (!token) { alert('Authentication token missing. Please log in.'); router.push('/login'); return; }
-    const response = await fetch(`http://localhost:5000/api/chapters/${chapterId}/quizzes`, { // NEW API ENDPOINT
+    
+    const url = new URL(`http://localhost:5000/api/chapters/${chapterId}/quizzes`);
+    if (query) {
+      url.searchParams.append('query', query);
+    }
+    if (bypassCache) {
+      url.searchParams.append('cache_bust', Date.now());
+    }
+
+    const response = await fetch(url.toString(), {
       headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }
     });
     if (response.ok) { quizzes.value = await response.json(); }
@@ -244,12 +268,20 @@ async function fetchQuizzes(chapterId) {
   } catch (error) { console.error('Network error fetching quizzes:', error); alert('Network error. Could not connect to the server.'); }
 }
 
-async function fetchQuestions(quizId) {
+const fetchQuizzesWithSearch = (bypassCache = false) => {
+  fetchQuizzes(selectedChapterId.value, searchQuizQuery.value, bypassCache);
+};
+
+async function fetchQuestions(quizId, bypassCache = false) {
   if (!quizId) { questions.value = []; return; }
   try {
     const token = localStorage.getItem('token');
     if (!token) { alert('Authentication token missing. Please log in.'); router.push('/login'); return; }
-    const response = await fetch(`http://localhost:5000/api/quizzes/${quizId}/questions`, { // NEW API ENDPOINT
+    const url = new URL(`http://localhost:5000/api/quizzes/${quizId}/questions`);
+    if (bypassCache) {
+      url.searchParams.append('cache_bust', Date.now());
+    }
+    const response = await fetch(url.toString(), {
       headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }
     });
     if (response.ok) { questions.value = await response.json(); }
@@ -257,30 +289,29 @@ async function fetchQuestions(quizId) {
   } catch (error) { console.error('Network error fetching questions:', error); alert('Network error. Could not connect to the server.'); }
 }
 
-// --- Lifecycle Hooks and Watchers ---
-onMounted(fetchSubjects);
+onMounted(() => fetchSubjects());
 
 watch(selectedSubjectId, (newSubjectId) => {
-  fetchChapters(newSubjectId);
-  selectedChapterId.value = ''; // Reset chapter selection
-  quizzes.value = []; // Clear quizzes
-  selectedQuizForQuestionsId.value = null; // Clear selected quiz for questions
+  fetchChaptersWithSearch(); // MODIFIED: Call fetchChaptersWithSearch without query for chapter dropdown
+  selectedChapterId.value = '';
+  quizzes.value = [];
+  selectedQuizForQuestionsId.value = null;
+  searchQuizQuery.value = ''; // Reset quiz search query
 });
 
 watch(selectedChapterId, (newChapterId) => {
-  fetchQuizzes(newChapterId);
-  selectedQuizForQuestionsId.value = null; // Clear selected quiz for questions
+  fetchQuizzesWithSearch();
+  selectedQuizForQuestionsId.value = null;
 });
 
 watch(selectedQuizForQuestionsId, (newQuizId) => {
   if (newQuizId) {
     fetchQuestions(newQuizId);
   } else {
-    questions.value = []; // Clear questions if no quiz is selected
+    questions.value = [];
   }
 });
 
-// --- Quiz Management Functions ---
 async function addQuiz() {
   if (!selectedChapterId.value) { alert('Please select a chapter first.'); return; }
   const token = localStorage.getItem('token');
@@ -295,8 +326,8 @@ async function addQuiz() {
   };
 
   const url = editingQuizId.value
-    ? `http://localhost:5000/api/quizzes/${editingQuizId.value}` // NEW API ENDPOINT
-    : `http://localhost:5000/api/chapters/${selectedChapterId.value}/quizzes`; // NEW API ENDPOINT for POST
+    ? `http://localhost:5000/api/quizzes/${editingQuizId.value}`
+    : `http://localhost:5000/api/chapters/${selectedChapterId.value}/quizzes`;
 
   const method = editingQuizId.value ? 'PUT' : 'POST';
 
@@ -308,7 +339,7 @@ async function addQuiz() {
     });
 
     if (response.ok) {
-      await fetchQuizzes(selectedChapterId.value); // Re-fetch quizzes
+      await fetchQuizzesWithSearch(true); // Force cache bypass after add/edit
       cancelEditQuiz();
     } else {
       const errorData = await response.json();
@@ -323,7 +354,7 @@ function editQuiz(quiz) {
   quizTitle.value = quiz.title;
   quizDescription.value = quiz.description;
   quizDuration.value = quiz.time_duration;
-  quizDate.value = quiz.date_of_quiz; // Assuming date_of_quiz is in YYYY-MM-DD format from backend
+  quizDate.value = quiz.date_of_quiz;
 }
 
 async function deleteQuiz(id) {
@@ -332,15 +363,15 @@ async function deleteQuiz(id) {
   if (!token) { alert('Authentication token missing. Please log in.'); router.push('/login'); return; }
 
   try {
-    const response = await fetch(`http://localhost:5000/api/quizzes/${id}`, { // NEW API ENDPOINT
+    const response = await fetch(`http://localhost:5000/api/quizzes/${id}`, {
       method: 'DELETE',
       headers: { 'Authorization': `Bearer ${token}` }
     });
 
     if (response.ok) {
-      await fetchQuizzes(selectedChapterId.value); // Re-fetch quizzes
+      await fetchQuizzesWithSearch(true); // Force cache bypass after delete
       if (editingQuizId.value === id) { cancelEditQuiz(); }
-      if (selectedQuizForQuestionsId.value === id) { selectedQuizForQuestionsId.value = null; } // Clear question management if quiz deleted
+      if (selectedQuizForQuestionsId.value === id) { selectedQuizForQuestionsId.value = null; }
     } else {
       const errorData = await response.json();
       alert(`Failed to delete quiz: ${errorData.message || response.statusText}`);
@@ -359,11 +390,9 @@ function cancelEditQuiz() {
 
 function selectQuizForQuestions(quiz) {
   selectedQuizForQuestionsId.value = quiz.id;
-  // Reset question form when selecting a new quiz
   cancelEditQuestion();
 }
 
-// --- Question Management Functions ---
 async function addQuestion() {
   if (!selectedQuizForQuestionsId.value) { alert('Please select a quiz to add questions to.'); return; }
   const token = localStorage.getItem('token');
@@ -374,14 +403,14 @@ async function addQuestion() {
     question_text: questionText.value,
     option1: option1.value,
     option2: option2.value,
-    option3: option3.value || null, // Send null if optional fields are empty
+    option3: option3.value || null,
     option4: option4.value || null,
     correct_option: Number(correctOption.value)
   };
 
   const url = editingQuestionId.value
-    ? `http://localhost:5000/api/questions/${editingQuestionId.value}` // NEW API ENDPOINT
-    : `http://localhost:5000/api/quizzes/${selectedQuizForQuestionsId.value}/questions`; // NEW API ENDPOINT for POST
+    ? `http://localhost:5000/api/questions/${editingQuestionId.value}`
+    : `http://localhost:5000/api/quizzes/${selectedQuizForQuestionsId.value}/questions`;
 
   const method = editingQuestionId.value ? 'PUT' : 'POST';
 
@@ -393,7 +422,7 @@ async function addQuestion() {
     });
 
     if (response.ok) {
-      await fetchQuestions(selectedQuizForQuestionsId.value); // Re-fetch questions
+      await fetchQuestions(selectedQuizForQuestionsId.value, true); // Force cache bypass after add/edit
       cancelEditQuestion();
     } else {
       const errorData = await response.json();
@@ -419,13 +448,13 @@ async function deleteQuestion(id) {
   if (!token) { alert('Authentication token missing. Please log in.'); router.push('/login'); return; }
 
   try {
-    const response = await fetch(`http://localhost:5000/api/questions/${id}`, { // NEW API ENDPOINT
+    const response = await fetch(`http://localhost:5000/api/questions/${id}`, {
       method: 'DELETE',
       headers: { 'Authorization': `Bearer ${token}` }
     });
 
     if (response.ok) {
-      await fetchQuestions(selectedQuizForQuestionsId.value); // Re-fetch questions
+      await fetchQuestions(selectedQuizForQuestionsId.value, true); // Force cache bypass after delete
       if (editingQuestionId.value === id) { cancelEditQuestion(); }
     } else {
       const errorData = await response.json();
@@ -445,7 +474,6 @@ function cancelEditQuestion() {
   correctOption.value = 1;
 }
 
-// --- Logout Function ---
 function logout() {
   localStorage.removeItem('token')
   router.push('/login')
@@ -453,40 +481,23 @@ function logout() {
 </script>
 
 <style scoped>
-/* All common styles for user layout and content are in user.css */
+/* No component-specific styles needed here if all are common and in admin.css */
 
-/* Custom radio button styling */
-.custom-radio {
-  background-color: #3d2766; /* Darker background */
+/* Custom select dropdown styling (unique to this page) */
+.custom-select {
+  background-color: #3d2766; /* Darker input background */
   border: 1px solid #6a4a9c; /* Purple border */
-  border-radius: 50%; /* Make it round */
-  width: 1.25rem;
-  height: 1.25rem;
-  appearance: none; /* Remove default radio button style */
-  cursor: pointer;
-  transition: all 0.2s ease;
-  position: relative;
-  top: 0.2em; /* Adjust vertical alignment */
+  color: #e0e0e0; /* Light text in input */
+  border-radius: 8px; /* Rounded input fields */
+  padding: 10px 15px;
+  appearance: none; /* Remove default select arrow */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23e060a8' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M2 5l6 6 6-6'/%3E%3C/svg%3E"); /* Custom arrow */
+  background-repeat: no-repeat;
+  background-position: right 0.75rem center;
+  background-size: 16px 12px;
 }
-.custom-radio:checked {
-  background-color: #e060a8; /* Neon pink when checked */
-  border-color: #e060a8;
-  box-shadow: 0 0 0 0.25rem rgba(224, 96, 168, 0.25); /* Neon glow */
-}
-.custom-radio:focus {
-  outline: none;
-  box-shadow: 0 0 0 0.25rem rgba(224, 96, 168, 0.5);
-}
-.custom-radio:checked::after {
-  content: '';
-  display: block;
-  width: 0.5rem;
-  height: 0.5rem;
-  background-color: #1a0f2d; /* Dark center dot */
-  border-radius: 50%;
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
+.custom-select:focus {
+  border-color: #e060a8; /* Neon pink focus border */
+  box-shadow: 0 0 0 0.25rem rgba(224, 96, 168, 0.25); /* Neon glow on focus */
 }
 </style>
