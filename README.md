@@ -162,36 +162,5 @@ celery -A celery_worker.celery worker --loglevel=info
 backend/instance/quiz.db
 ```
 
----
 
-## 📌 Future Enhancements
 
-* Role-based access control (RBAC)
-* Email notifications
-* Quiz timer improvements
-* Performance analytics dashboard
-* Deployment using Docker
-
----
-
-## 🤝 Contributing
-
-Contributions are welcome!
-Feel free to fork the repository and submit a pull request.
-
----
-
-## 📜 License
-
-This project is for **educational purposes** and can be freely used and modified.
-
----
-
-If you want, I can also:
-
-* ✨ Make it **resume-friendly**
-* 📦 Add **Docker support**
-* 🧠 Simplify it for **college submission**
-* 🖼️ Add screenshots section
-
-Just tell me 💙
